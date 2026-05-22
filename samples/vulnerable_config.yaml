@@ -1,0 +1,18 @@
+# Insecure configuration for demo
+database:
+  host: localhost
+  port: 5432
+  username: admin
+  password: plaintext_password_123
+
+api:
+  key: AKIAIOSFODNN7EXAMPLE
+  secret: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+
+jwt:
+  secret: hardcoded-jwt-secret-key
+  algorithm: HS256
+
+server:
+  debug: true
+  cors_allow_all: true

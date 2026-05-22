@@ -1,0 +1,10 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.git/
+.env
+*.egg-info/
+.pytest_cache/
+STRENGTHS.md
+CRITIQUE.md

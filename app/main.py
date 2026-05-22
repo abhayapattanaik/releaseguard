@@ -15,8 +15,17 @@ from .plugins.test_check import TestCheckPlugin
 from .decision import make_decision
 from .ai_summary import generate_summary
 from . import github_client
+from .db import init_db, store_evaluation
 
 app = FastAPI(title="ReleaseGuard", version="0.1.0")
+
+
+@app.on_event("startup")
+async def startup():
+    try:
+        await init_db()
+    except Exception:
+        pass  # DB optional — works without it
 
 # Load config
 with open(Path(__file__).parent.parent / "config.yaml") as f:
@@ -109,11 +118,46 @@ async def handle_webhook(request: Request):
         # Post comment to PR
         await github_client.post_comment(repo, pr_number, summary)
 
+        # Store audit trail
+        try:
+            plugin_data = [
+                {
+                    "name": r.plugin_name,
+                    "score": r.score,
+                    "passed": r.passed,
+                    "findings": [
+                        {
+                            "title": f.title,
+                            "severity": f.severity.value,
+                            "file": f.file,
+                            "line": f.line,
+                            "description": f.description,
+                        }
+                        for f in r.findings
+                    ],
+                }
+                for r in decision.plugin_results
+            ]
+            eval_id = await store_evaluation(
+                repo=repo,
+                pr_number=pr_number,
+                sha=sha,
+                pr_title=context.pr_title,
+                risk_score=decision.overall_score,
+                risk_level=decision.risk_level.value,
+                recommendation=decision.recommendation,
+                plugin_results=plugin_data,
+                summary=summary,
+            )
+        except Exception:
+            eval_id = None
+
         return {
             "status": "evaluated",
             "risk_score": decision.overall_score,
             "risk_level": decision.risk_level,
             "recommendation": decision.recommendation,
+            "eval_id": eval_id,
         }
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
@@ -224,6 +268,36 @@ async def demo():
         ],
         "summary": summary,
     }
+
+
+@app.get("/evaluations")
+async def list_evaluations(repo: str | None = None, limit: int = 20):
+    """List recent evaluations, optionally filtered by repo."""
+    from sqlalchemy import select
+    from .db import async_session, Evaluation
+    try:
+        async with async_session() as session:
+            query = select(Evaluation).order_by(Evaluation.id.desc()).limit(limit)
+            if repo:
+                query = query.where(Evaluation.repo == repo)
+            result = await session.execute(query)
+            rows = result.scalars().all()
+            return [
+                {
+                    "id": r.id,
+                    "repo": r.repo,
+                    "pr_number": r.pr_number,
+                    "sha": r.sha,
+                    "pr_title": r.pr_title,
+                    "risk_score": r.risk_score,
+                    "risk_level": r.risk_level,
+                    "recommendation": r.recommendation,
+                    "evaluated_at": r.evaluated_at.isoformat() if r.evaluated_at else None,
+                }
+                for r in rows
+            ]
+    except Exception:
+        return {"error": "Database not available"}
 
 
 @app.get("/health")

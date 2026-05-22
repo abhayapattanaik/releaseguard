@@ -1,22 +1,20 @@
 import asyncio
 import json
-import os
 from pathlib import Path
 
 from .base import BasePlugin, Finding, PluginResult, ReleaseContext, Severity
 
 _SEVERITY_MAP = {
-    "LOW": Severity.LOW,
-    "MEDIUM": Severity.MEDIUM,
-    "HIGH": Severity.HIGH,
-    "CRITICAL": Severity.CRITICAL,
+    "ERROR": Severity.CRITICAL,
+    "WARNING": Severity.HIGH,
+    "INFO": Severity.MEDIUM,
 }
 
 _SCORE_WEIGHT = {
-    Severity.LOW: 2,
-    Severity.MEDIUM: 10,
-    Severity.HIGH: 25,
     Severity.CRITICAL: 50,
+    Severity.HIGH: 25,
+    Severity.MEDIUM: 10,
+    Severity.LOW: 2,
 }
 
 
@@ -25,16 +23,6 @@ class SecurityPlugin(BasePlugin):
         return "security"
 
     async def evaluate(self, context: ReleaseContext) -> PluginResult:
-        py_files = [f for f in context.changed_files if f.endswith(".py")]
-
-        if not py_files:
-            return PluginResult(
-                plugin_name=self.name(),
-                score=0,
-                passed=True,
-                metadata={"reason": "no python files changed"},
-            )
-
         if not context.clone_dir:
             return PluginResult(
                 plugin_name=self.name(),
@@ -43,26 +31,22 @@ class SecurityPlugin(BasePlugin):
                 metadata={"reason": "no clone_dir provided"},
             )
 
-        abs_files = [
-            str(Path(context.clone_dir) / f)
-            for f in py_files
-            if (Path(context.clone_dir) / f).exists()
-        ]
-
-        if not abs_files:
+        clone_path = Path(context.clone_dir)
+        if not clone_path.exists():
             return PluginResult(
                 plugin_name=self.name(),
                 score=0,
                 passed=True,
-                metadata={"reason": "changed python files not found in clone_dir"},
+                metadata={"reason": "clone_dir does not exist"},
             )
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                "bandit",
-                "-f", "json",
-                "-q",
-                *abs_files,
+                "semgrep",
+                "scan",
+                "--config", "auto",
+                "--json",
+                str(clone_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -72,14 +56,14 @@ class SecurityPlugin(BasePlugin):
                 plugin_name=self.name(),
                 score=0,
                 passed=True,
-                metadata={"reason": "bandit not installed"},
+                metadata={"reason": "semgrep not installed"},
             )
         except Exception as e:
             return PluginResult(
                 plugin_name=self.name(),
                 score=0,
                 passed=True,
-                metadata={"reason": f"bandit error: {e}"},
+                metadata={"reason": f"semgrep error: {e}"},
             )
 
         try:
@@ -89,20 +73,41 @@ class SecurityPlugin(BasePlugin):
                 plugin_name=self.name(),
                 score=0,
                 passed=True,
-                metadata={"reason": "could not parse bandit output"},
+                metadata={"reason": "could not parse semgrep output"},
             )
 
+        changed_files_set = set(context.changed_files)
+
         findings = []
-        for issue in data.get("results", []):
-            raw_severity = issue.get("issue_severity", "LOW").upper()
-            severity = _SEVERITY_MAP.get(raw_severity, Severity.LOW)
+        for result in data.get("results", []):
+            # Filter to only changed files; semgrep returns paths relative to cwd
+            # or absolute — normalise to repo-relative for comparison
+            raw_path = result.get("path", "")
+            try:
+                rel_path = str(Path(raw_path).relative_to(clone_path))
+            except ValueError:
+                rel_path = raw_path
+
+            if rel_path not in changed_files_set:
+                continue
+
+            extra = result.get("extra", {})
+            raw_severity = extra.get("severity", "INFO").upper()
+            severity = _SEVERITY_MAP.get(raw_severity, Severity.MEDIUM)
+
+            metadata = extra.get("metadata", {})
+            cwe = metadata.get("cwe")
+            description = extra.get("message", "")
+            if cwe:
+                description = f"{description} [{cwe}]" if description else str(cwe)
+
             findings.append(
                 Finding(
-                    title=issue.get("test_id", "unknown"),
-                    description=issue.get("issue_text", ""),
+                    title=result.get("check_id", "unknown"),
+                    description=description,
                     severity=severity,
-                    file=issue.get("filename"),
-                    line=issue.get("line_number"),
+                    file=rel_path,
+                    line=result.get("start", {}).get("line"),
                 )
             )
 
@@ -115,5 +120,8 @@ class SecurityPlugin(BasePlugin):
             score=score,
             passed=passed,
             findings=findings,
-            metadata={"files_scanned": len(abs_files), "total_issues": len(findings)},
+            metadata={
+                "total_semgrep_results": len(data.get("results", [])),
+                "filtered_findings": len(findings),
+            },
         )
