@@ -1,0 +1,19 @@
+plugins:
+  - name: security
+    enabled: true
+    weight: 0.6
+    config:
+      block_on_critical: true
+  - name: test_check
+    enabled: true
+    weight: 0.4
+    config: {}
+
+risk_thresholds:
+  low: 30
+  medium: 60
+  high: 80
+
+ai_summary:
+  enabled: true
+  model: gpt-4o-mini
