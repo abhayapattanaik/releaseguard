@@ -4,21 +4,22 @@ import hmac
 import os
 import tempfile
 import shutil
+from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, Request, HTTPException
 
-from plugins.base import ReleaseContext
-from plugins.security import SecurityPlugin
-from plugins.test_check import TestCheckPlugin
-from decision import make_decision
-from ai_summary import generate_summary
-import github_client
+from .plugins.base import ReleaseContext
+from .plugins.security import SecurityPlugin
+from .plugins.test_check import TestCheckPlugin
+from .decision import make_decision
+from .ai_summary import generate_summary
+from . import github_client
 
 app = FastAPI(title="ReleaseGuard", version="0.1.0")
 
 # Load config
-with open("config.yaml") as f:
+with open(Path(__file__).parent.parent / "config.yaml") as f:
     CONFIG = yaml.safe_load(f)
 
 # Plugin registry
@@ -121,7 +122,7 @@ async def handle_webhook(request: Request):
 @app.get("/demo")
 async def demo():
     """Run full pipeline with realistic fake findings. No tokens needed."""
-    from plugins.base import Finding, PluginResult, Severity
+    from .plugins.base import Finding, PluginResult, Severity
 
     # Simulate security plugin finding SQL injection + hardcoded secret
     security_result = PluginResult(

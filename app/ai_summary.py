@@ -1,7 +1,7 @@
 import os
 
-from decision import Decision
-from plugins.base import ReleaseContext
+from .decision import Decision
+from .plugins.base import ReleaseContext
 
 
 def _fallback_summary(decision: Decision, context: ReleaseContext) -> str:

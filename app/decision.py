@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from plugins.base import PluginResult, Severity
+from .plugins.base import PluginResult, Severity
 
 
 @dataclass
